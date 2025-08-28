@@ -1,5 +1,4 @@
-# .github/workflows/build-manifest.yml  (replace the whole job if easier)
-name: Build media manifest
+name: Build manifest
 
 on:
   push:
@@ -9,52 +8,39 @@ on:
       - '**/*.jpeg'
       - '**/*.png'
       - '**/*.webp'
-      - '**/*.avif'
       - '**/*.gif'
+      - '**/*.avif'
+      - '**/*.heic'
+      - 'manifest.json'
       - '.github/scripts/generate-manifest.js'
       - '.github/workflows/build-manifest.yml'
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * 1'
+    - cron: '0 */6 * * *' # optional: refresh every 6 hours
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0
-          lfs: true
-
-      - name: Ensure LFS content is present
-        run: |
-          git lfs fetch --all
-          git lfs checkout
-
-      - name: Debug tree and counts
-        run: |
-          echo "PWD: $(pwd)"
-          ls -la
-          echo "Top-level dirs:"
-          find . -maxdepth 1 -type d -printf '%f\n' | sed '/^\.$/d'
-          echo "Image counts:"
-          for d in */ ; do
-            [ -d "$d" ] || continue
-            c=$(find "$d" -type f \( -iname '*.jpg' -o -iname '*.jpeg' -o -iname '*.png' -o -iname '*.webp' -o -iname '*.avif' -o -iname '*.gif' \) | wc -l)
-            printf "%-24s %6d\n" "$d" "$c"
-          done
-
-      - name: Generate manifest.json
-        env:
-          VERBOSE: '1'
-        run: node .github/scripts/generate-manifest.js
-
-      - name: Commit manifest if changed
-        uses: stefanzweifel/git-auto-commit-action@v5
+      - uses: actions/setup-node@v4
         with:
-          commit_message: 'chore: update manifest.json'
-          file_pattern: 'manifest.json'
+          node-version: 20
+      - name: Generate manifest
+        run: node .github/scripts/generate-manifest.js
+      - name: Commit & push (if changed)
+        run: |
+          if [[ -n "$(git status --porcelain manifest.json)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add manifest.json
+            git commit -m "chore: rebuild manifest [skip ci]"
+            git push
+          else
+            echo "No manifest changes."
+          fi
