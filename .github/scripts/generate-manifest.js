@@ -1,77 +1,74 @@
+// .github/scripts/generate-manifest.js
 const fs = require("fs");
 const path = require("path");
 
-const REPO_ROOT = process.cwd();
-const OUT_FILE = path.join(REPO_ROOT, "manifest.json");
+const ROOT = process.cwd();
+const IMG_EXTS = new Set([
+  ".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic",
+  ".JPG", ".JPEG", ".PNG", ".WEBP", ".GIF", ".AVIF", ".HEIC"
+]);
 
-// Add/keep extensions your site can actually render
-const IMG_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".avif", ".heic"]);
-
-const IGNORE_DIRS = new Set([".git", ".github", ".gitlab", ".vscode", "node_modules"]);
-const VERBOSE = (process.env.VERBOSE || "1") !== "0";
-const CATEGORIES_ENV = (process.env.CATEGORIES || "")
-  .split(",").map((s) => s.trim()).filter(Boolean);
-
-const natural = (a, b) => a.localeCompare(b, undefined, { numeric: true, sensitivity: "base" });
-
-function walkImages(rootDir, relFromRoot = "") {
-  let out = [];
-  for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-    const name = entry.name;
-    if (name.startsWith(".") || name.startsWith("_")) continue;
-    const full = path.join(rootDir, name);
-    const rel = path.posix.join(relFromRoot, name.replaceAll("\\", "/"));
-    if (entry.isDirectory()) {
-      if (IGNORE_DIRS.has(name)) continue;
-      out = out.concat(walkImages(full, rel));
-    } else if (entry.isFile()) {
-      const ext = path.extname(name).toLowerCase();
-      if (!IMG_EXTS.has(ext)) continue;
-      if (rel === "manifest.json") continue;
-      out.push(rel);
-    }
+// Recursively collect files under a dir
+function walk(dir) {
+  const out = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.name.startsWith(".")) continue; // skip hidden/.git
+    const abs = path.join(dir, entry.name);
+    if (entry.isDirectory()) out.push(...walk(abs));
+    else out.push(abs);
   }
   return out;
 }
 
-function detectTopFoldersWithImages() {
-  const folders = fs.readdirSync(REPO_ROOT, { withFileTypes: true })
-    .filter(e => e.isDirectory() && !IGNORE_DIRS.has(e.name) && !e.name.startsWith("."))
-    .map(e => e.name).sort(natural);
+// Build manifest: top-level folders become categories
+function buildManifest() {
+  const manifest = {};
+  const top = fs.readdirSync(ROOT, { withFileTypes: true })
+    .filter(d => d.isDirectory() && !d.name.startsWith("."))
+    .map(d => d.name);
 
-  const withImgs = [];
-  for (const f of folders) {
-    const found = walkImages(path.join(REPO_ROOT, f), f);
-    if (found.length) withImgs.push(f);
+  for (const dirName of top) {
+    const absDir = path.join(ROOT, dirName);
+    const files = walk(absDir)
+      .filter(f => IMG_EXTS.has(path.extname(f)))
+      .map(f => path.relative(ROOT, f).split(path.sep).join("/")); // posix paths
+
+    if (files.length) {
+      // Keep only files inside this category folder
+      const rels = files
+        .filter(f => f.startsWith(dirName + "/"))
+        .sort((a, b) => a.localeCompare(b, "en"));
+
+      if (rels.length) manifest[dirName] = rels;
+    }
   }
-  return withImgs;
+
+  return manifest;
+}
+
+function writeIfChanged(file, data) {
+  const next = JSON.stringify(data, null, 2) + "\n";
+  if (fs.existsSync(file)) {
+    const prev = fs.readFileSync(file, "utf8");
+    if (prev === next) {
+      console.log("manifest.json unchanged.");
+      return false;
+    }
+  }
+  fs.writeFileSync(file, next, "utf8");
+  console.log("manifest.json updated.");
+  return true;
 }
 
 (function main() {
-  const categories = CATEGORIES_ENV.length ? CATEGORIES_ENV : detectTopFoldersWithImages();
-  if (VERBOSE) console.log("Categories:", categories);
-
-  const manifest = {};
-  for (const cat of categories) {
-    const abs = path.join(REPO_ROOT, cat);
-    if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
-      if (VERBOSE) console.warn("[warn] Missing folder:", cat);
-      manifest[cat] = [];
-      continue;
-    }
-    const imgs = walkImages(abs, cat).sort(natural);
-    imgs.sort((a, b) => {
-      const score = p => (/(\bcover\b|\bhero\b|^0{1,3}\d)/i.test(path.basename(p)) ? 0 : 1);
-      const sa = score(a), sb = score(b);
-      return sa === sb ? natural(a, b) : sa - sb;
-    });
-    if (VERBOSE) console.log(`[${cat}] ${imgs.length} images`);
-    manifest[cat] = imgs;
+  const manifest = buildManifest();
+  const changed = writeIfChanged(path.join(ROOT, "manifest.json"), manifest);
+  // Log counts per category for debugging
+  for (const [k, v] of Object.entries(manifest)) {
+    console.log(`${k}: ${v.length} image(s)`);
   }
-
-  const json = JSON.stringify(manifest, null, 2) + "\n";
-  let changed = true;
-  try { changed = fs.readFileSync(OUT_FILE, "utf8") !== json; } catch {}
-  fs.writeFileSync(OUT_FILE, json, "utf8");
-  console.log(`Wrote ${OUT_FILE}${changed ? "" : " (no changes)"}`);
+  if (!Object.keys(manifest).length) {
+    console.warn("No images found. Are they inside top-level folders (e.g. Events/, Fashion/)?");
+  }
+  process.exit(0);
 })();
