@@ -1,3 +1,4 @@
+# .github/workflows/build-manifest.yml  (replace the whole job if easier)
 name: Build media manifest
 
 on:
@@ -14,7 +15,7 @@ on:
       - '.github/workflows/build-manifest.yml'
   workflow_dispatch:
   schedule:
-    - cron: '0 3 * * 1'  # weekly Monday 03:00 UTC
+    - cron: '0 3 * * 1'
 
 jobs:
   build:
@@ -28,12 +29,11 @@ jobs:
         with:
           fetch-depth: 0
           lfs: true
-          submodules: false
 
-      - name: Setup Node
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
+      - name: Ensure LFS content is present
+        run: |
+          git lfs fetch --all
+          git lfs checkout
 
       - name: Debug tree and counts
         run: |
@@ -50,85 +50,8 @@ jobs:
 
       - name: Generate manifest.json
         env:
-          # Set to specific folders OR remove to auto-detect folders with images
-          CATEGORIES: 'Events,Fashion'
           VERBOSE: '1'
-        run: |
-          node - <<'NODE'
-          const fs = require("fs");
-          const path = require("path");
-
-          const REPO_ROOT = process.cwd();
-          const OUT_FILE = path.join(REPO_ROOT, "manifest.json");
-          const IMG_EXTS = new Set([".jpg",".jpeg",".png",".webp",".gif",".avif",".heic"]);
-          const IGNORE_DIRS = new Set([".git",".github",".gitlab",".vscode","node_modules"]);
-          const VERBOSE = (process.env.VERBOSE || "1") !== "0";
-          const CATEGORIES_ENV = (process.env.CATEGORIES || "")
-            .split(",").map(s=>s.trim()).filter(Boolean);
-
-          const natural = (a,b)=>a.localeCompare(b,undefined,{numeric:true,sensitivity:"base"});
-
-          function walkImages(rootDir, relFromRoot="") {
-            let out = [];
-            for (const entry of fs.readdirSync(rootDir, { withFileTypes: true })) {
-              const name = entry.name;
-              if (name.startsWith(".") || name.startsWith("_")) continue;
-              const full = path.join(rootDir, name);
-              const rel = path.posix.join(relFromRoot, name.replaceAll("\\","/"));
-              if (entry.isDirectory()) {
-                if (IGNORE_DIRS.has(name)) continue;
-                out = out.concat(walkImages(full, rel));
-              } else if (entry.isFile()) {
-                const ext = path.extname(name).toLowerCase();
-                if (!IMG_EXTS.has(ext)) continue;
-                if (rel === "manifest.json") continue;
-                out.push(rel);
-              }
-            }
-            return out;
-          }
-
-          function detectTopFoldersWithImages() {
-            const folders = fs.readdirSync(REPO_ROOT, { withFileTypes: true })
-              .filter(e=>e.isDirectory() && !IGNORE_DIRS.has(e.name) && !e.name.startsWith("."))
-              .map(e=>e.name).sort(natural);
-            const withImgs = [];
-            for (const f of folders) {
-              const found = walkImages(path.join(REPO_ROOT,f), f);
-              if (found.length) withImgs.push(f);
-            }
-            return withImgs;
-          }
-
-          (function main(){
-            let categories = CATEGORIES_ENV.length ? CATEGORIES_ENV : detectTopFoldersWithImages();
-            if (VERBOSE) console.log("Categories:", categories);
-
-            const manifest = {};
-            for (const cat of categories) {
-              const abs = path.join(REPO_ROOT, cat);
-              if (!fs.existsSync(abs) || !fs.statSync(abs).isDirectory()) {
-                if (VERBOSE) console.warn("[warn] Missing folder:", cat);
-                manifest[cat] = [];
-                continue;
-              }
-              const imgs = walkImages(abs, cat).sort(natural);
-              imgs.sort((a,b)=>{
-                const score = p => (/(\bcover\b|\bhero\b|^0{1,3}\d)/i.test(path.basename(p)) ? 0 : 1);
-                const sa = score(a), sb = score(b);
-                return sa === sb ? natural(a,b) : sa - sb;
-              });
-              if (VERBOSE) console.log(`[${cat}] ${imgs.length} images`);
-              manifest[cat] = imgs;
-            }
-
-            const json = JSON.stringify(manifest, null, 2) + "\n";
-            let changed = true;
-            try { changed = fs.readFileSync(OUT_FILE,"utf8") !== json; } catch {}
-            fs.writeFileSync(OUT_FILE, json, "utf8");
-            console.log(`Wrote ${OUT_FILE}${changed ? "" : " (no changes)"}`);
-          })();
-          NODE
+        run: node .github/scripts/generate-manifest.js
 
       - name: Commit manifest if changed
         uses: stefanzweifel/git-auto-commit-action@v5
