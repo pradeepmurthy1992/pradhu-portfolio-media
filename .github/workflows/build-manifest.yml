@@ -44,3 +44,10 @@ jobs:
         with:
           commit_message: "chore: update manifest.json"
           file_pattern: "manifest.json"
+
+- name: Checkout
+  uses: actions/checkout@v4
+  with:
+    fetch-depth: 0
+    lfs: true           # ✅ pull LFS content so the files are present
+    submodules: true    # only if you keep images in submodules
