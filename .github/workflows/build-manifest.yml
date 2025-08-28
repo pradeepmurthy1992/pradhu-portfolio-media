@@ -1,0 +1,46 @@
+name: Build media manifest
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "**/*.jpg"
+      - "**/*.jpeg"
+      - "**/*.png"
+      - "**/*.webp"
+      - "**/*.avif"
+      - "**/*.gif"
+      - ".github/scripts/generate-manifest.js"
+      - ".github/workflows/build-manifest.yml"
+  workflow_dispatch:
+  schedule:
+    - cron: "0 3 * * 1" # weekly Monday 03:00 UTC refresh
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # allow committing manifest.json back to the repo
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Generate manifest.json
+        run: node .github/scripts/generate-manifest.js
+        env:
+          # Optional: lock to explicit categories; comma-separated top-level folders.
+          # Leave empty to auto-detect all top-level folders that contain images.
+          CATEGORIES: "Events,Fashion"
+
+      - name: Commit manifest if changed
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: update manifest.json"
+          file_pattern: "manifest.json"
